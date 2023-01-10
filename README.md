@@ -869,4 +869,284 @@ Base = declarative_base()
 
 ```
 
-7. 
+7. Configuramos carpetas adicionales
+    a. Crear carpeta models
+    b. Un archivo movie.py
+
+    ```python
+    from config.database import Base
+    from sqlalchemy import Column, Integer, String
+
+    class Movie(Base):
+        __tablename__ = 'movies'
+        id = Column(Integer, primary_key=True)
+        title = Column(String)
+        overview = Column(String)
+        year = Column(String)
+        rating = Column(String)
+        category = Column(String)
+    ```
+
+    c. importamos en el archivo main y modificamos el endopoint post (AÑADIR)
+    ```python
+        from fastapi import FastAPI,
+        from config.database import Session, engine, Base
+        from models.movie import Movie as MovieModel
+
+        Base.metadata.create_all(bind=engine)
+        app = FastAPI()
+
+        @app.post('/movies', tags=['movies'], response_model=dict,status_code=201)
+        def create_movie(movie:Movie) -> dict:
+            db = Session()
+            new_movie = MovieModel(**movie.dict())
+            db.add(new_movie)
+            db.commit()
+            return JSONResponse(status_code=201,content={"message":"Se ha registrado la película"})
+    ```
+
+    d. Leer datos de la base de datos
+    ```python
+        @app.get('/movies', tags=['movies'], response_model=List[Movie],status_code=200, dependencies=[Depends(JWTBearer())])
+            def get_movies() -> List[Movie]:
+            db = Session()
+            result = db.query(MovieModel).all()
+            return JSONResponse(status_code=200,content=jsonable_encoder(result))
+    ```
+    e. Modificar datos
+    ```python
+        @app.put('/movies/{id}', tags=['movies'], response_model=dict,status_code=200)
+        def update_movie(id:int, movie: Movie) -> dict:
+            db = Session()
+            result = db.query(MovieModel).filter(MovieModel.id == id).first()
+            if not result:
+                return JSONResponse(status_code=404,content={"message":"No se ha encontrado"})  
+            
+            result.title = movie.title
+            result.overview = movie.overview
+            result.year = movie.year
+            result.rating = movie.rating
+            result.category = movie.category
+            db.commit()
+            return JSONResponse(status_code=200,content={"message":"Se ha modificado la película"})
+    ```
+    f. Eliminar datos
+    ```python
+        @app.delete('/movies/{id}', tags=['movies'], response_model=dict,status_code=200)
+        def delete_movie(id:int) -> dict:
+            db = Session()
+            result = db.query(MovieModel).filter(MovieModel.id == id).first()
+            if not result:
+                return JSONResponse(status_code=404,content={"message":"No se ha encontrado"})  
+
+            db.delete(result)
+            db.commit()
+            return JSONResponse(status_code=200,content={"message":"Se ha eliminado la película"})
+    ```
+
+<div style="margin-bottom:50px;"></div>
+
+## Manejo de errores y middlewares
+---
+
+1. Creamos una carpeta en la raiz del proyecto llamada middlewares
+2. Le añadimos un archivo inicial __init__.py vacío
+3. Añadimos un archivo llamado error_handler.py
+    ```python
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from fastapi import FastAPI, Request, Response
+        from fastapi.responses import JSONResponse
+
+
+        class ErrorHandler(BaseHTTPMiddleware):
+            def __init__(self, app:FastAPI) -> None:
+                super().__init__(app)
+
+            async def dispatch(self, request: Request, call_next) -> Response | JSONResponse:
+                try:
+                    return await call_next(request)
+                except Exception as e:
+                    return JSONResponse(status_code=500, content={'error': str(e)})
+    ```
+
+    > El “|” para hacer la diferenciación entre Respose | JSONResponse se agregó en Python3.10, por lo que no está disponible para las versiones anteriores de Python. En caso de usar una versión anterior obtendrán el siguiente error.
+
+
+<div style="margin-bottom:50px;"></div>
+
+## Creación de routers
+---
+
+fastAPI te da la posibilidad de dividir tu aplicación en módulos utilizando routers, los culaes permiten dividir el código en distintos archivos evitando así tener todo en uno solo.
+
+
+1. Crear una carpeta llamada routers
+2. Le añadimos un archivo inicial __init__.py vacío
+3. Creamos el archivo llamado movie.py. pasamos todas la rutas de main a este archivo que tengan que ver con movie
+    ```python
+        from fastapi import APIRouter
+
+        movie_router = APIRouter()
+    ```
+4. Eliminar de main.py las rutas trasladadas e importar el router
+    ```python
+        from routers.movie import movie_router
+
+        app.include_router(movie_router)
+    ```
+
+> Realizar este proceso para todas las rutas.
+
+<div style="margin-bottom:50px;"></div>
+
+## Servicios para consultar datos
+---
+Nos permiten separar la logica de nuestros routers
+
+1. Crear una carpeta llamada services
+2. Le añadimos un archivo inicial __init__.py vacío
+3. Creamos el archivo llamado movie.py. pasamos todas las consultas a dicho archivo
+    ```python
+        from models.movie import Movie as MovieModel
+
+        class MovieService():
+            
+            def __init__(self, db) -> None:
+                self.db = db
+
+            def get_movies(self):
+                result = self.db.query(MovieModel).all()
+                return result
+
+            def get_movie(self, id):
+                result = self.db.query(MovieModel).filter(MovieModel.id == id).first()
+                return result
+
+            def get_movies_by_category(self, category):
+                result = self.db.query(MovieModel).filter(MovieModel.category == category).all()
+                return result
+    ```
+4. modificar en el router de movie.py los servicios
+    ```python
+        from services.movie import MovieService
+
+        @movie_router.get('/movies', tags=['movies'], response_model=List[Movie],status_code=200, dependencies=[Depends(JWTBearer())])
+        def get_movies() -> List[Movie]:
+            db = Session()
+            result = MovieService(db).get_movies()
+            return JSONResponse(status_code=200,content=jsonable_encoder(result))
+
+        @movie_router.get('/movies/{id}', tags=['movies'],response_model= Movie)
+        def get_movie(id: int = Path(ge=1, le=2000)) -> Movie:
+            db = Session()
+            result = MovieService(db).get_movie(id)
+            if not result:
+                return JSONResponse(status_code=404,content={"message":"No se ha encontrado"})        
+            return JSONResponse(status_code=200,content=jsonable_encoder(result))
+
+        @movie_router.get('/movies/', tags=['movies'], response_model=List[Movie])
+        def get_movies_by_category(category: str = Query(min_length=5, max_length=15)) -> List[Movie]:
+            db = Session()
+            result = MovieService(db).get_movies_by_category(category)
+            if not result:
+                return JSONResponse(status_code=404,content={"message":"No se ha encontrado esta categoria"})        
+            return JSONResponse(status_code=200,content=jsonable_encoder(result))
+    ```
+
+<div style="margin-bottom:50px;"></div>
+
+## Servicios para registrar y modificar datos
+---
+
+1. Crear una carpeta llamada schemas
+2. Le añadimos un archivo inicial __init__.py vacío
+3. Creamos el archivo llamado movie.py,  movemos el schema de routers
+    ```python
+        from pydantic import BaseModel, Field
+        from typing import Optional
+
+        class Movie(BaseModel):
+            id: Optional[int] = None
+            title:str = Field(min_length=5,max_length=15)
+            overview:str = Field(min_length=15,max_length=50)
+            year:int = Field(gt=1900,le=2023)
+            rating:float = Field(ge=1, le=10)
+            category:str = Field(min_length=5,max_length=15)
+
+            class Config:
+                schema_extra = {
+                    "example": {
+                        "title": "The Shawshank",
+                        "overview": "Descripción de la pelicula lorem",
+                        "year": 1994,
+                        "rating": 9.3,
+                        "category": "Drama",
+                    }
+                }
+    ```
+4. en movie.py de router importamos el schema creado en el item 3
+    ```python
+        from schemas.movie import Movie
+    ```
+
+> Realizamos lo mismo con user
+
+5. Agregamos actualizar y eliminar movie.py en services
+
+    ```python
+        def update_movie(self, id:int, data: Movie):
+            movie = self.db.query(MovieModel).filter(MovieModel.id == id).first()
+            movie.title = data.title
+            movie.overview = data.overview
+            movie.year = data.year
+            movie.rating = data.rating
+            movie.category = data.category
+            self.db.commit()
+            return
+
+        def delete_movie(self, id: int):
+            self.db.query(MovieModel).filter(MovieModel.id == id).first().delete()
+            self.db.commit()
+            return
+    ```
+
+6. Modificamos el actualizar y eliminar de movie.py routers
+
+    ```python
+        @movie_router.put('/movies/{id}', tags=['movies'], response_model=dict,status_code=200)
+        def update_movie(id:int, movie: Movie) -> dict:
+        db = Session()
+        result = MovieService(db).get_movie(id)
+        if not result:
+            return JSONResponse(status_code=404,content={"message":"No se ha encontrado"})
+        MovieService(db).update_movie(id, movie)
+        return JSONResponse(status_code=200,content={"message":"Se ha modificado la película"})
+
+        @movie_router.delete('/movies/{id}', tags=['movies'], response_model=dict,status_code=200)
+        def delete_movie(id:int) -> dict:
+            db = Session()
+            result = MovieService(db).get_movie(id)
+            if not result:
+                return JSONResponse(status_code=404,content={"message":"No se ha encontrado"})  
+            MovieService(db).delete_movie(id)
+            return JSONResponse(status_code=200,content={"message":"Se ha eliminado la película"})
+    ```
+
+<div style="margin-bottom:50px;"></div>
+
+## Preparando el proyecto para desplegar a producción
+---
+
+1. Creamos una carpeta llamada utils
+2. Le añadimos un archivo inicial __init__.py vacío
+2. Pasamos el archivo jwt_manager.py a esta carpeta y renombramos su ubicación en los archivos.
+4. Crear el archivo .gitignore
+    ```bash
+        venv/
+        __pycache__
+        database.sqlite
+    ```
+5. Crear el archivo requirements.txt
+    ```bash
+       pip freeze > requirements.txt
+    ```
